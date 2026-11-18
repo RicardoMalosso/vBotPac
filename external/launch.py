@@ -5,6 +5,7 @@ import getpass
 import json
 import uuid
 from broker import Broker
+from discover_client import find_clients, select_client
 from pathlib import Path
 import shutil
 import subprocess
@@ -78,12 +79,40 @@ def configure(snapshot_name=None):
     (mod / "executor.lua").write_text(executor, encoding="utf-8")
 
 
+def pick_client(discovery, pid=None):
+    matches = discovery["matches"]
+    if pid is None and len(matches) > 1:
+        print("Open OTClients:")
+        for client in matches:
+            print(f"  {client['pid']}  {client['target']}")
+        available = {client["pid"] for client in matches}
+        while True:
+            value = input("Client PID: ").strip()
+            if value.isdecimal() and int(value) in available:
+                pid = int(value)
+                break
+            print("Enter one of the listed PIDs.")
+    return select_client(discovery, pid)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, help="Install from a cached upstream ZIP")
     parser.add_argument("--connect", action="store_true", help="Connect to a running broker")
     parser.add_argument("--pid", type=int, help="Require this broker-selected client PID")
+    parser.add_argument("--offline", action="store_true", help="Open the profile without a client")
+    parser.add_argument("--profile", type=Path,
+                        default=ROOT / "external/profiles/exoria74-gl.json")
     args = parser.parse_args()
+    if args.offline and (args.connect or args.pid is not None):
+        parser.error("--offline cannot be combined with a client selection")
+    if sys.platform == "win32" and not args.offline:
+        try:
+            selected = pick_client(find_clients(args.profile), args.pid)
+        except (OSError, ValueError, EOFError) as error:
+            parser.exit(1, f"{error}\n")
+        args.pid = selected["pid"]
+        print(f"Selected PID {args.pid}")
     broker = None
     if args.connect or args.pid is not None:
         broker = Broker(getpass.getpass("Paste the broker launch URL (hidden): "), args.pid)
