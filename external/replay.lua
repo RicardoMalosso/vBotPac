@@ -22,6 +22,7 @@ end
 
 local panel = {listPanel = {list = list}, showEditor = {}, showConfig = {}}
 local tick, timer, activate
+local interactive = arg[1] == "--interactive"
 local trace = {}
 local function noop() end
 local env = setmetatable({
@@ -61,7 +62,7 @@ env.CaveBot = {
     focus = focus or rows[1]
   end,
   Actions = {observe = {callback = function(value, retries)
-    trace[#trace + 1] = value .. "/" .. retries
+    if not interactive then trace[#trace + 1] = value .. "/" .. retries end
     if value == "B" and retries == 0 then return "retry" end
     return true
   end}}
@@ -78,6 +79,32 @@ end
 chunk()
 assert(not timer.enabled)
 activate("route", true, {{"observe", "A"}, {"observe", "B"}})
+if interactive then
+  io.stdout:setvbuf("no")
+  for _, row in ipairs(list:getChildren()) do
+    print("row", row.action, row.value)
+  end
+  local function report()
+    print("focus", list:getChildIndex(list:getFocusedChild()))
+  end
+  report()
+  for command in io.lines() do
+    if command == "step" then
+      env.now = env.now + timer.interval
+      if timer.enabled then tick() end
+    elseif command == "quit" then
+      break
+    else
+      local index = tonumber(command:match("^select (%d+)$"))
+      local child = index and list:getChildByIndex(index)
+      assert(child, "invalid replay command")
+      list:focusChild(child)
+    end
+    report()
+  end
+  return
+end
+
 for i = 1, 4 do
   env.now = i * timer.interval
   assert(timer.enabled)
