@@ -1,5 +1,16 @@
 -- Loaded in the game_bot module scope of the separate UI process.
+local snapshotPath = nil
+externalSnapshot = {}
+local function updateSnapshot()
+  if not snapshotPath then return end
+  local ok, data = pcall(function()
+    return json.decode(g_resources.readFileContents(snapshotPath))
+  end)
+  externalSnapshot = ok and data or {error = "Snapshot unavailable"}
+end
+
 function openExternalProfile()
+  updateSnapshot()
   g_window.setMinimumSize({width = 400, height = 400})
   g_window.resize({width = 420, height = 580})
   local root = g_ui.getRootWidget()
@@ -36,6 +47,22 @@ function openExternalProfile()
     g_logger.info("[vBotPac] tab " .. tab:getText())
   end
   panel.botTabs:selectTab(selected)
-  panel.statusLabel:setText("Profile loaded - Offline")
+  if snapshotPath then
+    local function refresh()
+      updateSnapshot()
+      local state = externalSnapshot
+      if state.error or not state.position then
+        panel.statusLabel:setText("Broker disconnected: " .. tostring(state.error))
+        return
+      end
+      local pos = state.position
+      panel.statusLabel:setText(string.format("%s - PID %d - (%d, %d, %d)",
+        state.name, state.pid, pos.x, pos.y, pos.z))
+      scheduleEvent(refresh, 1000)
+    end
+    refresh()
+  else
+    panel.statusLabel:setText("Profile loaded - Offline")
+  end
   g_logger.info("[vBotPac] profile loaded; tabs=" .. #panel.botTabs:getTabs())
 end
