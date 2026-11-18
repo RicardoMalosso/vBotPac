@@ -3,7 +3,7 @@ import argparse
 import hashlib
 import json
 import uuid
-from direct import DirectBroker, process_mailbox
+from direct import DirectBroker, process_mailbox, lua_literal
 from native import binaries
 import time
 from discover_client import find_clients, select_client
@@ -59,7 +59,7 @@ def configure(snapshot_name=None, rpc_path=None, token=None):
     (INSTALL / "init.lua").write_text(init, encoding="utf-8")
     host = (ROOT / "external/host.lua").read_text(encoding="utf-8")
     if rpc_path is not None:
-        prefix="local VBP_RPC_PATH="+json.dumps(str(rpc_path).replace("\\","/"))+";local VBP_TOKEN="+json.dumps(token)+"\n"
+        prefix="local VBP_RPC_PATH="+lua_literal(str(rpc_path).replace("\\","/"))+";local VBP_TOKEN="+json.dumps(token)+"\n"
         host=prefix+(ROOT/"external/remote.lua").read_text(encoding="utf-8")+"\n"+host
     host = host.replace("local snapshotPath = nil", "local snapshotPath = " + (json.dumps("/" + snapshot_name) if snapshot_name else "nil"))
     (mod / "bot.lua").write_text((mod / "bot.upstream").read_text(encoding="utf-8") + "\n" + host,

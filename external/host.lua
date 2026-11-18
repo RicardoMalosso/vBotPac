@@ -25,6 +25,9 @@ function openExternalProfile()
   panel.config:addOption("vBotPac")
   panel.enableButton:setEnabled(snapshotPath~=nil)
   panel.enableButton:setOn(snapshotPath~=nil)
+  panel.enableButton.onClick=function(widget)
+    if snapshotPath and not externalRemote.failed then widget:setOn(not widget:isOn()) end
+  end
   panel.editConfig:setEnabled(false)
   panel.botTabs:setOn(true)
   local errors = {}

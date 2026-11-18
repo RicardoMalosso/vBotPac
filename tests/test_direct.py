@@ -120,7 +120,45 @@ class FacadeTests(unittest.TestCase):
                 self.assertEqual(ui.execute('return context.g_game.multiple()'),(None,'second',False))
                 self.assertEqual(ui.eval('context.clientLua("return direction")'),3)
                 self.assertEqual(ui.eval('context.clientGlobal("echo")("custom")'),'custom')
+                self.assertEqual(ui.eval('context.g_game.optional("first",nil,"third")'),'third')
                 ui.execute('externalRemote.poll({})')
             finally:
                 stop.set();thread.join(timeout=3)
             self.assertFalse(thread.is_alive());self.assertEqual(failures,[])
+
+class HostLifecycleTests(unittest.TestCase):
+    def test_connected_macro_runner_pauses_and_resumes_without_old_client_refresh(self):
+        lua=LuaRuntime(unpack_returned_tuples=True)
+        lua.execute('''
+queue={};runs=0;polls=0
+local widget={on=false}
+function widget:setOn(value)self.on=value end
+function widget:isOn()return self.on end
+function widget:setEnabled()end
+function widget:setText()end
+function widget:clearOptions()end
+function widget:addOption()end
+local tab={getText=function()return 'Main' end}
+local tabs=setmetatable({current=tab},{__index=widget})
+function tabs:getCurrentTab()return self.current end
+function tabs:getTabs()return {tab} end
+function tabs:selectTab(t)self.current=t end
+contentsPanel={config=widget,enableButton=setmetatable({on=false},{__index=widget}),editConfig=widget,botTabs=tabs,statusLabel=widget}
+botWindow=setmetatable({},{__index=function()return function()end end})
+g_window={setMinimumSize=function()end,resize=function()end}
+g_ui={getRootWidget=function()return {getChildren=function()return {}end}end}
+g_resources={readFileContents=function()return 'fixture' end}
+json={decode=function()return {name='Fixture',pid=42,position={x=1,y=2,z=7}} end}
+g_logger={info=function()end,error=function(e)error(e)end}
+function executeBot()return {script=function()runs=runs+1 end,callbacks={}}end
+externalRemote={failed=false,poll=function()polls=polls+1 end}
+function scheduleEvent(fn,ms)table.insert(queue,{fn=fn,ms=ms})end
+function nextMacro()for i,e in ipairs(queue)do if e.ms==50 then table.remove(queue,i);e.fn();return end end;error('No macro timer')end
+''')
+        source=(ROOT/'external/host.lua').read_text().replace('local snapshotPath = nil','local snapshotPath = "fixture"')
+        lua.execute(source);lua.execute('openExternalProfile();nextMacro()')
+        self.assertEqual(lua.globals().runs,1)
+        lua.execute('contentsPanel.enableButton:onClick();nextMacro()')
+        self.assertEqual(lua.globals().runs,1)
+        lua.execute('contentsPanel.enableButton:onClick();nextMacro()')
+        self.assertEqual(lua.globals().runs,2)
