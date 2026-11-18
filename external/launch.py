@@ -1,6 +1,10 @@
 """Install the pinned private UI runtime and open the original vBot profile."""
 import argparse
 import hashlib
+import getpass
+import json
+import uuid
+from broker import Broker
 from pathlib import Path
 import shutil
 import subprocess
@@ -36,7 +40,7 @@ def install(archive):
         runtime.rename(INSTALL)
 
 
-def configure():
+def configure(snapshot_name=None):
     profile = INSTALL / "bot/vBotPac"
     profile.mkdir(parents=True, exist_ok=True)
     for name in ("cavebot", "targetbot", "vBot"):
@@ -52,6 +56,7 @@ def configure():
     init += '\ng_modules.ensureModuleLoaded("game_bot")\nscheduleEvent(modules.game_bot.openExternalProfile, 350)\n'
     (INSTALL / "init.lua").write_text(init, encoding="utf-8")
     host = (ROOT / "external/host.lua").read_text(encoding="utf-8")
+    host = host.replace("local snapshotPath = nil", "local snapshotPath = " + (json.dumps("/" + snapshot_name) if snapshot_name else "nil"))
     (mod / "bot.lua").write_text((mod / "bot.upstream").read_text(encoding="utf-8") + "\n" + host,
                                  encoding="utf-8")
     executor = (mod / "executor.upstream").read_text(encoding="utf-8")
@@ -59,8 +64,8 @@ def configure():
     executor = executor.replace("context.player = g_game.getLocalPlayer()", """
   -- Offline startup observations. No game actions run during profile loading.
   context.player = {
-    getName = function() return "Offline" end,
-    getPosition = function() return {x=0, y=0, z=7} end,
+    getName = function() return externalSnapshot.name or "Offline" end,
+    getPosition = function() return externalSnapshot.position or {x=0, y=0, z=7} end,
     getVocation = function() return 0 end,
     getFreeCapacity = function() return 0 end,
     getExperience = function() return 0 end,
@@ -76,12 +81,43 @@ def configure():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, help="Install from a cached upstream ZIP")
+    parser.add_argument("--connect", action="store_true", help="Connect to a running broker")
+    parser.add_argument("--pid", type=int, help="Require this broker-selected client PID")
     args = parser.parse_args()
+    broker = None
+    if args.connect or args.pid is not None:
+        broker = Broker(getpass.getpass("Paste the broker launch URL (hidden): "), args.pid)
+        initial = broker.read()
     install(args.archive)
-    configure()
+    snapshot = INSTALL / ("session-" + uuid.uuid4().hex + ".json")
+    def publish(value):
+        temporary = snapshot.with_suffix(".tmp")
+        temporary.write_text(json.dumps(value), encoding="utf-8")
+        temporary.replace(snapshot)
+    configure(snapshot.name if broker else None)
     binary = INSTALL / ("otclient_gl.exe" if sys.platform == "win32" else "otclient_linux")
     binary.chmod(binary.stat().st_mode | 0o100)
-    return subprocess.call([str(binary)], cwd=INSTALL)
+    if not broker:
+        return subprocess.call([str(binary)], cwd=INSTALL)
+    try:
+        publish(initial)
+        with subprocess.Popen([str(binary)], cwd=INSTALL) as window:
+            try:
+                while True:
+                    try:
+                        return window.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        publish(broker.read())
+            except (OSError, ValueError, KeyError) as error:
+                publish({"error": str(error)})
+                print(f"Broker disconnected: {error}", file=sys.stderr)
+                return window.wait()
+            finally:
+                if window.poll() is None:
+                    window.terminate()
+    finally:
+        snapshot.unlink(missing_ok=True)
+        snapshot.with_suffix(".tmp").unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
