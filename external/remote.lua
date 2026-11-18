@@ -28,6 +28,12 @@ local function rpc(request)
  R.failed=true;error('Client RPC timed out; command outcome unknown; no replay')
 end
 local decode,encode
+local function unpackValues(values,count)
+ local args={};for i=1,count do
+  local value=values[i];if value==nil then value=values[tostring(i)] end;args[i]=value
+ end
+ return unpack(args,1,count)
+end
 local function proxy(target,kind)
  local cacheKey=target.ref and tostring(target.ref) or target.root
  if proxies[cacheKey] then return proxies[cacheKey] end
@@ -41,10 +47,7 @@ local function proxy(target,kind)
   local args={};for i=1,select('#',...)do args[i]=encode(select(i,...)) end
   local result=decode(rpc({op='call',root=target.root,ref=target.ref,args=args,count=select('#',...),multi=true}))
   if result and result.__vbp_returns then
-   local values={};for i=1,result.count do
-    local value=result.values[i];if value==nil then value=result.values[tostring(i)] end;values[i]=value
-   end
-   return unpack(values,1,result.count)
+   return unpackValues(result.values,result.count)
   end
   return result
  end
@@ -75,6 +78,6 @@ function R.poll(callbacks)
  assert(batch.dropped==0,'Client event queue overflow; automation stopped')
  for _,event in ipairs(batch.events or {})do
   local callback=callbacks[event.name]
-  if callback then callback(unpack(event.args,1,event.count)) end
+  if callback then callback(unpackValues(event.args,event.count)) end
  end
 end

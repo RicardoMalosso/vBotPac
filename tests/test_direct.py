@@ -121,7 +121,9 @@ class FacadeTests(unittest.TestCase):
                 self.assertEqual(ui.eval('context.clientLua("return direction")'),3)
                 self.assertEqual(ui.eval('context.clientGlobal("echo")("custom")'),'custom')
                 self.assertEqual(ui.eval('context.g_game.optional("first",nil,"third")'),'third')
-                ui.execute('externalRemote.poll({})')
+                ui.execute('context.clientLua([[callbacks.onTextMessage(1,nil,"third")]])')
+                result=ui.execute('local a,b,c;externalRemote.poll({onTextMessage=function(x,y,z)a,b,c=x,y,z end});return a,b,c')
+                self.assertEqual(result,(1,None,'third'))
             finally:
                 stop.set();thread.join(timeout=3)
             self.assertFalse(thread.is_alive());self.assertEqual(failures,[])
