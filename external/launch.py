@@ -1,10 +1,11 @@
 """Install the pinned private UI runtime and open the original vBot profile."""
 import argparse
 import hashlib
-import getpass
 import json
 import uuid
-from broker import Broker
+from direct import DirectBroker, process_mailbox
+from native import binaries
+import time
 from discover_client import find_clients, select_client
 from pathlib import Path
 import shutil
@@ -41,7 +42,7 @@ def install(archive):
         runtime.rename(INSTALL)
 
 
-def configure(snapshot_name=None):
+def configure(snapshot_name=None, rpc_path=None, token=None):
     profile = INSTALL / "bot/vBotPac"
     profile.mkdir(parents=True, exist_ok=True)
     for name in ("cavebot", "targetbot", "vBot"):
@@ -57,23 +58,18 @@ def configure(snapshot_name=None):
     init += '\ng_modules.ensureModuleLoaded("game_bot")\nscheduleEvent(modules.game_bot.openExternalProfile, 350)\n'
     (INSTALL / "init.lua").write_text(init, encoding="utf-8")
     host = (ROOT / "external/host.lua").read_text(encoding="utf-8")
+    if rpc_path is not None:
+        prefix="local VBP_RPC_PATH="+json.dumps(str(rpc_path).replace("\\","/"))+";local VBP_TOKEN="+json.dumps(token)+"\n"
+        host=prefix+(ROOT/"external/remote.lua").read_text(encoding="utf-8")+"\n"+host
     host = host.replace("local snapshotPath = nil", "local snapshotPath = " + (json.dumps("/" + snapshot_name) if snapshot_name else "nil"))
     (mod / "bot.lua").write_text((mod / "bot.upstream").read_text(encoding="utf-8") + "\n" + host,
                                  encoding="utf-8")
     executor = (mod / "executor.upstream").read_text(encoding="utf-8")
     executor = executor.replace("context.math = math", "context.math = setmetatable({mod = math.mod or math.fmod}, {__index = math})")
-    executor = executor.replace("context.player = g_game.getLocalPlayer()", """
-  -- Offline startup observations. No game actions run during profile loading.
-  context.player = {
-    getName = function() return externalSnapshot.name or "Offline" end,
-    getPosition = function() return externalSnapshot.position or {x=0, y=0, z=7} end,
-    getVocation = function() return 0 end,
-    getFreeCapacity = function() return 0 end,
-    getExperience = function() return 0 end,
-    getDirection = function() return 0 end,
-    getBlessings = function() return 0 end,
-    getLevel = function() return 1 end
-  }""")
+    if rpc_path is not None:
+        executor = executor.replace("context.player = g_game.getLocalPlayer()", "externalRemote.install(context)")
+    else:
+        executor = executor.replace("context.player = g_game.getLocalPlayer()", "context.player = {getName=function()return 'Offline'end,getPosition=function()return {x=0,y=0,z=7}end,getVocation=function()return 0 end,getFreeCapacity=function()return 0 end,getExperience=function()return 0 end,getDirection=function()return 0 end,getBlessings=function()return 0 end,getLevel=function()return 1 end}")
     executor = executor.replace("context.dofile = function(file) assert",
                                 'context.dofile = function(file) g_logger.info("[vBotPac] load " .. file); assert')
     (mod / "executor.lua").write_text(executor, encoding="utf-8")
@@ -98,11 +94,13 @@ def pick_client(discovery, pid=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, help="Install from a cached upstream ZIP")
-    parser.add_argument("--connect", action="store_true", help="Connect to a running broker")
-    parser.add_argument("--pid", type=int, help="Require this broker-selected client PID")
+    parser.add_argument("--connect", action="store_true", help="Attach directly to the selected running client")
+    parser.add_argument("--pid", type=int, help="Attach to this running client PID")
     parser.add_argument("--offline", action="store_true", help="Open the profile without a client")
     parser.add_argument("--profile", type=Path,
                         default=ROOT / "external/profiles/exoria74-gl.json")
+    parser.add_argument("--controller", type=Path, help="Use an existing framed pinj.exe")
+    parser.add_argument("--dll", type=Path, help="Use an existing matching pinj_bridge.dll")
     args = parser.parse_args()
     if args.offline and (args.connect or args.pid is not None):
         parser.error("--offline cannot be combined with a client selection")
@@ -113,41 +111,49 @@ def main():
             parser.exit(1, f"{error}\n")
         args.pid = selected["pid"]
         print(f"Selected PID {args.pid}")
-    broker = None
-    if args.connect or args.pid is not None:
-        broker = Broker(getpass.getpass("Paste the broker launch URL (hidden): "), args.pid)
-        initial = broker.read()
+    # Install the window before attaching, so downloads cannot hold a game session.
     install(args.archive)
+    broker = None
     snapshot = INSTALL / ("session-" + uuid.uuid4().hex + ".json")
+    rpc_folder=INSTALL/("rpc-"+uuid.uuid4().hex)
     def publish(value):
-        temporary = snapshot.with_suffix(".tmp")
-        temporary.write_text(json.dumps(value), encoding="utf-8")
-        temporary.replace(snapshot)
-    configure(snapshot.name if broker else None)
-    binary = INSTALL / ("otclient_gl.exe" if sys.platform == "win32" else "otclient_linux")
-    binary.chmod(binary.stat().st_mode | 0o100)
-    if not broker:
-        return subprocess.call([str(binary)], cwd=INSTALL)
+        temporary=snapshot.with_suffix('.tmp')
+        temporary.write_text(json.dumps(value),encoding='utf-8');temporary.replace(snapshot)
     try:
-        publish(initial)
-        with subprocess.Popen([str(binary)], cwd=INSTALL) as window:
+        if args.connect or args.pid is not None:
+            if sys.platform != 'win32':parser.error('Direct attachment requires Windows')
+            selected=select_client(find_clients(args.profile),args.pid)
+            controller,dll=binaries(args.controller,args.dll)
+            broker=DirectBroker(selected,args.profile,controller,dll)
+            rpc_folder.mkdir()
+            publish(broker.read())
+        configure(snapshot.name if broker else None,rpc_folder if broker else None,broker.token if broker else None)
+        binary=INSTALL/("otclient_gl.exe" if sys.platform=='win32' else 'otclient_linux')
+        binary.chmod(binary.stat().st_mode|0o100)
+        if not broker:return subprocess.call([str(binary)],cwd=INSTALL)
+        with subprocess.Popen([str(binary)],cwd=INSTALL) as window:
             try:
-                while True:
-                    try:
-                        return window.wait(timeout=1)
-                    except subprocess.TimeoutExpired:
-                        publish(broker.read())
-            except (OSError, ValueError, KeyError) as error:
-                publish({"error": str(error)})
-                print(f"Broker disconnected: {error}", file=sys.stderr)
+                previous=0;next_snapshot=0
+                while window.poll() is None:
+                    previous=process_mailbox(broker,rpc_folder,previous)
+                    if time.monotonic()>=next_snapshot:
+                        publish(broker.read());next_snapshot=time.monotonic()+1
+                    time.sleep(.002)
+                return window.returncode
+            except (OSError,ValueError,KeyError) as error:
+                publish({'error':str(error)})
+                print(f'Client disconnected: {error}',file=sys.stderr)
                 return window.wait()
             finally:
-                if window.poll() is None:
-                    window.terminate()
+                if window.poll() is None:window.terminate()
     finally:
-        snapshot.unlink(missing_ok=True)
-        snapshot.with_suffix(".tmp").unlink(missing_ok=True)
+        try:
+            if broker:broker.close()
+        finally:
+            shutil.rmtree(rpc_folder,ignore_errors=True)
+            snapshot.unlink(missing_ok=True)
+            snapshot.with_suffix('.tmp').unlink(missing_ok=True)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main())

@@ -23,7 +23,8 @@ function openExternalProfile()
   local panel = contentsPanel
   panel.config:clearOptions()
   panel.config:addOption("vBotPac")
-  panel.enableButton:setEnabled(false)
+  panel.enableButton:setEnabled(snapshotPath~=nil)
+  panel.enableButton:setOn(snapshotPath~=nil)
   panel.editConfig:setEnabled(false)
   panel.botTabs:setOn(true)
   local errors = {}
@@ -63,6 +64,17 @@ function openExternalProfile()
     refresh()
   else
     panel.statusLabel:setText("Profile loaded - Offline")
+  end
+  if snapshotPath and externalRemote then
+    local function run()
+      if externalRemote.failed or externalSnapshot.error then panel.enableButton:setOn(false);return end
+      if panel.enableButton:isOn() then
+        local ok,err=pcall(function()externalRemote.poll(result.callbacks);result.script()end)
+        if not ok then panel.enableButton:setOn(false);panel.statusLabel:setText(tostring(err));g_logger.error(tostring(err));return end
+      end
+      scheduleEvent(run,50)
+    end
+    scheduleEvent(run,50)
   end
   g_logger.info("[vBotPac] profile loaded; tabs=" .. #panel.botTabs:getTabs())
 end

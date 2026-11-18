@@ -1,0 +1,5 @@
+.vbot-runtime/
+.venv/
+build-external/
+__pycache__/
+*.pyc
