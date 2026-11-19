@@ -1,0 +1,26 @@
+name: In-client vBot module
+on: [push, pull_request]
+jobs:
+  verify:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m venv .venv
+      - name: Install test LuaJIT and pinned project CMake
+        shell: bash
+        run: |
+          if [ -f .venv/Scripts/python.exe ]; then P=.venv/Scripts/python.exe; else P=.venv/bin/python; fi
+          "$P" -m pip install lupa==2.6
+          "$P" -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements-cmake.txt
+      - name: Check complete package and lifecycle
+        shell: bash
+        run: |
+          if [ -f .venv/Scripts/python.exe ]; then P=.venv/Scripts/python.exe; else P=.venv/bin/python; fi
+          "$P" -m unittest discover -s tests -v
+          "$P" tests/build_native_module.py

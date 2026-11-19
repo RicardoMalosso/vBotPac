@@ -14,6 +14,7 @@
 #include "atomic_protocol.hpp"
 #include "atomic_wire.hpp"
 #include "pipe_io.hpp"
+#include "module_loader.hpp"
 struct lua_State;
 using Pcall=int(*)(lua_State*,int,int,int);
 using Load=int(*)(lua_State*,const char*,size_t,const char*);
@@ -24,7 +25,7 @@ Pcall original=nullptr;Load load=nullptr;Gettop gettop=nullptr;Settop settop=nul
 std::atomic<unsigned long long> calls{0};
 struct Request {
     std::string source,response,token;
-    bool binding=false;
+    bool binding=false,native_module=false;
     std::shared_ptr<pinj::AtomicRequest> primitive;
     HANDLE done=CreateEventW(nullptr,TRUE,FALSE,nullptr);
     bool started=false,cancelled=false;
@@ -80,7 +81,7 @@ int hook(lua_State* L,int nargs,int results,int errfunc) {
                 std::lock_guard<std::mutex> lock(pending_mutex);
                 response=atomic_authorized()&&gate.matches(job->token,state,thread,GetTickCount64())?
                     atomic_session.dispatch(*job->primitive,atomic_api,L,GetTickCount64(),atomic_clock,atomic_authorized):pinj::atomic_error("stale_session");
-            } else response=pinj::execute_lua(api,L,job->source);
+            } else response=job->native_module?pinj::execute_module(api,atomic_api,L,job->source):pinj::execute_lua(api,L,job->source);
             if(job) {
                 {std::lock_guard<std::mutex> lock(pending_mutex);job->response=std::move(response);if(pending==job)pending.reset();}
                 SetEvent(job->done);
@@ -90,10 +91,10 @@ int hook(lua_State* L,int nargs,int results,int errfunc) {
     --nesting;
     return result;
 }
-std::string execute(const std::string& source,const std::string& token="",bool binding=false,std::shared_ptr<pinj::AtomicRequest> primitive={}) {
+std::string execute(const std::string& source,const std::string& token="",bool binding=false,std::shared_ptr<pinj::AtomicRequest> primitive={},bool native_module=false) {
     auto job=std::make_shared<Request>();
     if(!job->done)return "ERROR\nCannot allocate request event";
-    job->source=source;job->token=token;job->binding=binding;job->primitive=primitive;
+    job->source=source;job->token=token;job->binding=binding;job->primitive=primitive;job->native_module=native_module;
     {std::lock_guard<std::mutex> lock(pending_mutex);if(pending)return "ERROR\nQueue busy";
      if(!token.empty()&&!binding&&!gate.renew(token,GetTickCount64()))return primitive?pinj::atomic_error("unbound"):"ERROR\nExternal session is not bound";
      if(primitive){const auto error=atomic_session.reserve(*primitive,GetTickCount64());if(!error.empty())return pinj::atomic_error(error.c_str());}
@@ -186,7 +187,12 @@ DWORD WINAPI worker(void*) {
         DWORD length=0;if(!pinj::pipe_transfer(pipe,&length,4,false)||!length||length>65541)break;
         std::string command(length,'\0');if(!pinj::pipe_transfer(pipe,command.data(),length,false))break;
         std::string response;
-        if(command=="status")response="PInj bridge v0.8; profile="+std::string(fingerprint)+"; lua_pcall observations="+std::to_string(calls.load());
+        if(command=="status")response="vBotPac in-client bridge v0.9; profile="+std::string(fingerprint)+"; lua_pcall observations="+std::to_string(calls.load());
+        else if(command=="module-capabilities")response=atomic_api.pushcclosure&&atomic_api.pushlstring?"OK\nvBotPac module loader v1":"ERROR\nModule compiler unavailable";
+        else if(command.rfind("module-v1 ",0)==0) {
+            if(command.size()<=43||command[42]!=' '||command.substr(10,32)!=connection_owner)response="ERROR\nBind this connection before loading a module";
+            else response=execute(command.substr(43),connection_owner,false,{},true);
+        }
         else if(command=="atomic-capabilities")response=pinj::atomic_capabilities(atomic_api.getfield!=nullptr,atomic_api.pushlstring!=nullptr&&atomic_api.rawget!=nullptr);
         else if(command.rfind("atomic-bind ",0)==0) {
             const auto token=command.substr(12);

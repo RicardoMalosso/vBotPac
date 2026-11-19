@@ -18,7 +18,7 @@ def binaries(controller=None, dll=None):
         python = venv_python()
         if not python.exists():
             if sys.version_info[:2] != (3, 12):
-                raise ValueError('Launch with Python 3.12: py -3.12 external/window.py')
+                raise ValueError('Launch with Python 3.12: py -3.12 inclient/launch.py')
             subprocess.run([sys.executable, '-m', 'venv', str(ROOT/'.venv')], check=True)
         cmake = cmake_executable()
         env = native_build_environment()
