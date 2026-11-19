@@ -47,14 +47,19 @@ def files():
 def stage(write_dir, selected, character):
     write_dir=Path(write_dir).resolve()
     if not write_dir.is_dir():raise ValueError('Client write directory is unavailable')
-    sources=files();digest=hashlib.sha256()
+    sources=files();digest=hashlib.sha256(b'vbotpac-native-bot-resources-v2\n')
     for source,relative in sources:digest.update(relative.encode());digest.update(source.read_bytes())
     digest.update((ROOT/'inclient/bootstrap.lua').read_bytes())
     revision=digest.hexdigest()[:16]
     identity=hashlib.sha256((selected['sha256']+'\n'+character).encode()).hexdigest()[:24]
     root=write_dir/'vbotpac_inclient'
     if root.is_symlink():raise ValueError('Symlink runtime destination unsupported')
-    runtime='/vbotpac_inclient/runtime/'+revision
+    # Native UI/image loaders read resources internally, outside the Lua
+    # readFileContents facade. OTCv8/Exoria treats paths containing /bot/ as
+    # plaintext bot resources; other .otui/.png paths can terminate the client
+    # when its resource-encryption mode is enabled. Keep every runtime asset in
+    # that supported tree, still outside the client's top-level /bot configs.
+    runtime='/vbotpac_inclient/bot/runtime/'+revision
     profiles='/vbotpac_inclient/profiles/'+identity+'/bot'
     helpers={name:[] for name in ('functions','panels')}
     for source,relative in sources:

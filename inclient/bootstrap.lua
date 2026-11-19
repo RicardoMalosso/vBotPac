@@ -1,6 +1,9 @@
 -- SPEC is supplied by the launcher. The DLL supplies this compiler argument.
 local nativeCompile=...
 assert(type(nativeCompile)=='function','Native compiler argument missing')
+-- A native UI/image read can terminate encrypted clients before Lua pcall can
+-- catch an error. Reject an obsolete/unsafe package layout before any UI loads.
+assert(type(SPEC.runtime)=='string' and SPEC.runtime:find('/bot/',1,true),'Unsafe native resource layout; update the launcher (runtime requires /bot/)')
 assert(not _G.__vbotpac_module or _G.__vbotpac_module.closed,'vBotPac is already loaded; unload it first')
 assert(type(setfenv)=='function','Lua 5.1 environments are required')
 assert(g_game and g_game.isOnline() and g_game.getLocalPlayer(),'Select an online character')
@@ -194,5 +197,5 @@ local ok,failure=pcall(function()
  end
  scope.scheduleEvent(watchdog,100)
 end)
-if not ok then S.unload();error(failure) end
+if not ok then S.errors[#S.errors+1]=tostring(failure);S.unload();error(failure) end
 return 'loaded; compiled='..#S.compiled

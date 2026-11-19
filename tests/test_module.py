@@ -12,6 +12,25 @@ from launch import ModuleSession
 
 
 class PackageTests(unittest.TestCase):
+    def test_native_ui_and_image_resources_use_the_plaintext_bot_tree(self):
+        with tempfile.TemporaryDirectory() as folder:
+            spec=stage(folder,{'sha256':'a'*64},'Player')
+            root=Path(folder)
+            native_assets=[]
+            for source,relative in files():
+                prefix=spec['runtime'] if relative.startswith('runtime/') else spec['profile']
+                virtual=prefix+'/'+relative[8:]
+                if source.suffix in ('.otui','.png'):
+                    # Same path rule used by the native resource reader. A Lua
+                    # pcall cannot recover from its fatal decrypt-file branch.
+                    self.assertIn('/bot/',virtual,virtual)
+                    self.assertTrue((root/virtual.lstrip('/')).is_file(),virtual)
+                    native_assets.append(virtual)
+            self.assertGreater(len(native_assets),20)
+            self.assertTrue(any(x.endswith('/ui/basic.otui') for x in native_assets))
+            self.assertTrue(any(x.endswith('/configs.png') for x in native_assets))
+            self.assertFalse((root/'bot').exists(),'Private runtime must not appear as a client bot configuration')
+
     def test_complete_runtime_is_staged_privately_and_keeps_saved_config(self):
         with tempfile.TemporaryDirectory() as folder:
             selected={'sha256':'a'*64}
@@ -156,10 +175,17 @@ function vbpIsRunning()return running end
 function vbpSetEnabled(value)if value then refresh()else clear()end end
 '''
         if fail:code+='\nfunction init()botWindow=g_ui.loadUI("fixture");error("fixture failure")end\n'
-        lua.globals().resources['/runtime/bot.lua']=code
-        spec={'token':'t','runtime':'/runtime','profile':'/private/bot','trace':'/trace.json','helpers':{}}
+        lua.globals().resources['/fixture/bot/runtime/bot.lua']=code
+        spec={'token':'t','runtime':'/fixture/bot/runtime','profile':'/private/bot','trace':'/trace.json','helpers':{}}
         source='local SPEC='+literal(spec)+'\n'+(ROOT/'inclient/bootstrap.lua').read_text()
         return lua,source
+    def test_legacy_encrypted_resource_layout_is_rejected_before_ui_creation(self):
+        lua,source=self.fixture()
+        source=source.replace('"/fixture/bot/runtime"','"/vbotpac_inclient/runtime/legacy"')
+        with self.assertRaisesRegex(Exception,'Unsafe native resource layout'):
+            lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler)
+        self.assertIsNone(lua.globals().__vbotpac_module)
+        self.assertIsNone(lua.globals().destroyed)
     def test_private_namespace_uses_real_globals_and_keeps_registry_unchanged(self):
         lua,source=self.fixture();result=lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler)
         self.assertTrue(result.startswith('loaded'))
