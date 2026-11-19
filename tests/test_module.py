@@ -24,7 +24,7 @@ class PackageTests(unittest.TestCase):
             self.assertFalse(list(root.rglob('*.otmod')))
             bot=(runtime/'bot.lua').read_text()
             self.assertIn('function vbpIsRunning()',bot)
-            self.assertIn('ownsWidget(widget)',bot)
+            self.assertIn('widget.botWidget and ownsWidget(widget)',bot)
             ui=(runtime/'bot.otui').read_text()
             self.assertIn('_G.__vbotpac_module.scope.',ui)
             self.assertNotIn('modules.game_bot.',ui)
@@ -56,7 +56,60 @@ class PackageTests(unittest.TestCase):
         s.close()
 
 
-if __name__=='__main__':unittest.main()
+class RuntimeAdaptationTests(unittest.TestCase):
+    def test_real_executor_inherits_client_globals_and_keeps_profile_writes_private(self):
+        from lupa.luajit20 import LuaRuntime
+        lua=LuaRuntime(unpack_returned_tuples=True)
+        lua.execute('''
+clientGlobals=_G;steps=0;spoken='';customClientFunction=function()return 42 end
+G={};g_game={getLocalPlayer=function()return {}end,walk=function(n)steps=steps+n end,talk=function(s)spoken=s end}
+g_clock={millis=function()return 0 end};g_app={};g_platform={};g_ui={createWidget=function()return {}end}
+function dofiles()end
+function string:split()return {'fixture','lua'}end
+g_resources={listDirectoryFiles=function()return {'fixture.lua'}end,readFileContents=function()return [[
+ assert(_G==clientGlobals and customClientFunction()==42)
+ assert(g_game==_G.g_game)
+ g_game.walk(2);g_game.talk('hello');privateProfileValue='private'
+]] end}
+tabs={addTab=function()return {tabPanel={content={}}}end}
+function onContextReady(context)loadedContext=context end
+''')
+        executor=adapt('executor.lua',(ROOT/'vendor/game_bot/executor.lua').read_text(),'/runtime','/private/bot')
+        lua.execute(executor)
+        lua.execute("executeBot('vBotPac',{},tabs,function()end,function()end,function()end,{})")
+        self.assertEqual(lua.globals().steps,2)
+        self.assertEqual(lua.globals().spoken,'hello')
+        self.assertIsNone(lua.eval('_G.privateProfileValue'))
+        self.assertEqual(lua.eval('loadedContext.privateProfileValue'),'private')
+
+    def test_original_game_bot_clear_keeps_host_windows_and_foreign_bot_widgets(self):
+        from lupa.luajit20 import LuaRuntime
+        lua=LuaRuntime(unpack_returned_tuples=True)
+        lua.execute('''
+local function widget(extra)
+ local value=extra or {};value.destroy=function(self)self.destroyed=true end
+ for _,name in ipairs({'setup','hide','show','setOn','setContentWidget','clearTabs','destroyChildren','updateLayout','unlockVisibleFloor'})do value[name]=function()end end
+ return value
+end
+profileWindow=widget({botWidget=true});foreignWindow=widget({botWidget=true})
+bot=widget({contentsPanel={config={},enableButton={},statusLabel={},messages=widget(),botTabs=widget()}})
+editor=widget();button=widget();owned={[profileWindow]=true,[bot]=true,[editor]=true}
+function ownsWidget(value)return owned[value]==true end
+local left={getChildren=function()return {bot}end};local empty={getChildren=function()return {}end}
+g_ui={importStyle=function()end,loadUI=function()return bot end,displayUI=function()return editor end,
+ getRootWidget=function()return {getChildren=function()return {editor,profileWindow,foreignWindow}end}end}
+modules={client_topmenu={addRightGameToggleButton=function()return button end},game_interface={
+ getLeftPanel=function()return left end,getRightPanel=function()return empty end,gameMapPanel=empty,getMapPanel=function()return widget()end}}
+g_game={isOnline=function()return true end,enableTileThingLuaCallback=function()error('Shared callback disabled')end}
+function connect()end;function disconnect()end;function dofile()end;function scheduleEvent()end;function removeEvent()end
+function tr(value)return value end
+''')
+        lua.execute(adapt('bot.lua',(ROOT/'vendor/game_bot/bot.lua').read_text(),'/runtime','/private/bot'))
+        lua.execute('init()')
+        self.assertTrue(lua.eval('profileWindow.destroyed'))
+        self.assertIsNone(lua.eval('foreignWindow.destroyed'))
+        self.assertIsNone(lua.eval('bot.destroyed'))
+        self.assertIsNone(lua.eval('editor.destroyed'))
 
 class NamespaceTests(unittest.TestCase):
     """Small lifecycle fixture, not a claim of complete vBot/UI startup."""
@@ -75,7 +128,7 @@ existingBot={marker='existing'};modules={game_interface={},game_bot=existingBot}
 g_settings={getNode=function()return {}end,setNode=function()end}
 g_logger={info=function()end,warning=function()end}
 json={encode=function()return '{}' end}
-function connect()end;function disconnect()end
+function connect(object,callbacks)lastCallbacks=callbacks end;function disconnect()end
 function scheduleEvent(fn,ms)nextId=nextId+1;queue[nextId]={fn=fn,ms=ms};return nextId end
 function removeEvent(id)queue[id]=nil end
 function runTimer(ms)for id,event in pairs(queue)do if event.ms==ms then queue[id]=nil;event.fn();return end end;error('Missing timer')end
@@ -120,9 +173,16 @@ function vbpSetEnabled(value)if value then refresh()else clear()end end
         lua.eval('__vbotpac_module.control("t","unload")')
         self.assertIsNone(lua.globals().__vbotpac_module)
         self.assertTrue(lua.globals().destroyed)
+    def test_signal_callbacks_preserve_return_values(self):
+        lua,source=self.fixture();lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler)
+        lua.execute('__vbotpac_module.scope.connect(g_game,{onTest=function()return true,42 end})')
+        self.assertEqual(lua.eval('lastCallbacks.onTest()'),(True,42))
     def test_startup_failure_rolls_back_only_its_namespace_and_widgets(self):
         lua,source=self.fixture(True)
         with self.assertRaisesRegex(Exception,'fixture failure'):lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler)
         self.assertIsNone(lua.globals().__vbotpac_module)
         self.assertTrue(lua.eval('modules.game_bot==existingBot'))
         self.assertTrue(lua.globals().destroyed)
+
+
+if __name__=='__main__':unittest.main()

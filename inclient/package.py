@@ -13,11 +13,12 @@ def adapt(relative, text, runtime, profiles):
         if relative=='bot.otui':text=text.replace('id: botWindow','id: vbotpacModuleWindow')
         if relative=='edit.otui':text=text.replace('id: editWindow','id: vbotpacModuleEditor')
     if relative=='executor.lua':
+        text=text.replace('local context = {}','local context = setmetatable({}, {__index=getfenv(1)})')
         text=text.replace('context.math = math','context.math = setmetatable({mod=math.mod or math.fmod},{__index=math})')
         text=text.replace('G.botContext = nil','if onContextReady then onContextReady(context) end\n  G.botContext = nil')
     if relative=='bot.lua':
         text=text.replace("'botButton'","'vbotpacModuleButton'")
-        text=text.replace('if widget.botWidget then','if ownsWidget(widget) then').replace('if child.botWidget then','if ownsWidget(child) then')
+        text=text.replace('if widget.botWidget then','if widget.botWidget and ownsWidget(widget) then').replace('if child.botWidget then','if child.botWidget and ownsWidget(child) then')
         text=text.replace('g_game.enableTileThingLuaCallback(false)','-- Leave the shared client callback setting unchanged')
         text=text.replace('if not modules.client_profiles.ChangedProfile then','if not modules.client_profiles or not modules.client_profiles.ChangedProfile then')
         text+='''

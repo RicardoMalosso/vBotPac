@@ -5,8 +5,8 @@ import sys
 import lupa.luajit20 as luajit
 
 
-def verify(library):
-    lua=ctypes.CDLL(luajit.__file__);pointer=ctypes.c_void_p
+def verify(library,lua_library=None):
+    lua=ctypes.CDLL(str(Path(lua_library).resolve()) if lua_library else luajit.__file__);pointer=ctypes.c_void_p
     for name,restype,args in [('luaL_newstate',pointer,[]),('luaL_openlibs',None,[pointer]),('lua_close',None,[pointer]),('lua_gettop',ctypes.c_int,[pointer]),('luaL_loadbuffer',ctypes.c_int,[pointer,ctypes.c_char_p,ctypes.c_size_t,ctypes.c_char_p]),('lua_pcall',ctypes.c_int,[pointer,ctypes.c_int,ctypes.c_int,ctypes.c_int]),('lua_tolstring',ctypes.c_char_p,[pointer,ctypes.c_int,pointer])]:
         fn=getattr(lua,name);fn.restype=restype;fn.argtypes=args
     class Api(ctypes.Structure):_fields_=[(n,pointer) for n in ('load','pcall','gettop','settop','tolstring')]
@@ -43,4 +43,4 @@ def verify(library):
     finally:lua.lua_close(L)
     print('PASS native compiler closure: actual LuaJIT C API, real _G/game calls, private nested compilation, syntax/type/size errors and stack restoration')
 
-if __name__=='__main__':verify(sys.argv[1])
+if __name__=='__main__':verify(*sys.argv[1:])

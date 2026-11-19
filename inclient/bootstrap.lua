@@ -7,7 +7,7 @@ assert(g_game and g_game.isOnline() and g_game.getLocalPlayer(),'Select an onlin
 assert(g_ui and g_ui.loadUI and g_ui.importStyle,'Client UI API unavailable')
 assert(g_resources and g_resources.readFileContents,'Client resource API unavailable')
 assert(modules and modules.game_interface,'Client game_interface module unavailable')
-local S={token=SPEC.token,closed=false,paused=false,ready=false,errors={},compiled={},events={},connections={},widgets={},ticks=0,last=g_clock.millis()}
+local S={token=SPEC.token,closed=false,paused=false,ready=false,errors={},compiled={},events={},connections={},widgets=setmetatable({},{__mode='k'}),ticks=0,last=g_clock.millis()}
 local function registry()
  if not g_modules or type(g_modules.getModules)~='function' then return nil end
  local names={};for _,entry in pairs(g_modules.getModules())do names[#names+1]=entry:getName() end
@@ -38,7 +38,13 @@ function scope.g_resources.listDirectoryFiles(file,...)
  return g_resources.listDirectoryFiles(path(file),...)
 end
 scope.g_ui=setmetatable({}, {__index=g_ui})
-local function track(widget)if widget then S.widgets[#S.widgets+1]=widget end;return widget end
+local function track(widget)if widget then S.widgets[widget]=true end;return widget end
+if modules.client_topmenu then
+ scope.modules.client_topmenu=setmetatable({}, {__index=modules.client_topmenu})
+ function scope.modules.client_topmenu.addRightGameToggleButton(...)
+  return track(modules.client_topmenu.addRightGameToggleButton(...))
+ end
+end
 function scope.g_ui.importStyle(file)return g_ui.importStyle(path(file))end
 function scope.g_ui.loadUI(file,parent)return track(g_ui.loadUI(path(file),parent))end
 function scope.g_ui.displayUI(file,...)return track(g_ui.displayUI(path(file),...))end
@@ -64,10 +70,13 @@ function scope.dofiles(directory)
  for _,file in ipairs(files)do scope.dofile(file) end
 end
 local function guarded(fn)
+ local function finish(ok,...)
+  if not ok then S.fail((...));return end
+  return ...
+ end
  return function(...)
   if S.closed then return end
-  local ok,err=pcall(fn,...)
-  if not ok then S.fail(err) end
+  return finish(pcall(fn,...))
  end
 end
 function scope.connect(object,callbacks)
@@ -87,8 +96,8 @@ end
 scope.addEvent=function(fn)return scope.scheduleEvent(fn,0)end
 function scope.removeEvent(handle)if handle then S.events[handle]=nil;return removeEvent(handle) end end
 function scope.cycleEvent(fn,delay)
- local current;local function run()if not S.closed then fn();current=scope.scheduleEvent(run,delay) end end
- current=scope.scheduleEvent(run,delay);return current
+ local handle=cycleEvent(guarded(fn),delay)
+ S.events[handle]=fn;return handle
 end
 function S.message(text)
  S.error=tostring(text):sub(1,2048)
@@ -120,7 +129,7 @@ function S.unload()
  if scope.terminate then pcall(scope.terminate) end
  for event in pairs(S.events)do pcall(removeEvent,event) end;S.events={}
  for i=#S.connections,1,-1 do local c=S.connections[i];pcall(disconnect,c.object,c.callbacks) end;S.connections={}
- for i=#S.widgets,1,-1 do pcall(function()S.widgets[i]:destroy()end) end;S.widgets={}
+ for widget in pairs(S.widgets)do pcall(function()widget:destroy()end) end;S.widgets={}
  if _G.__vbotpac_module==S then _G.__vbotpac_module=nil end
  return 'unloaded'
 end
@@ -134,8 +143,7 @@ function S.control(token,operation)
 end
 scope.onContextReady=function(context)S.context=context end
 function scope.ownsWidget(widget)
- for _,owned in ipairs(S.widgets)do if widget==owned then return true end end
- return false
+ return S.widgets[widget]==true
 end
 _G.__vbotpac_module=S
 local ok,failure=pcall(function()
@@ -177,7 +185,7 @@ local ok,failure=pcall(function()
  S.ready=true;S.paused=false
  assert(S.registryBefore==registry(),'Client module registry changed during startup')
  trace()
- if scope.botButton then S.widgets[#S.widgets+1]=scope.botButton end
+ track(scope.botButton)
  scope.botWindow:open();scope.botWindow:raise();scope.botButton:setOn(true)
  local function watchdog()
   if S.closed then return end
