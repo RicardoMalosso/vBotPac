@@ -1,6 +1,8 @@
+.vbot-runtime/
+.venv/
+build-external/
+*.pyc
 /data/
 /build-module-test/
 /build-test-luajit/
-/build-external/
-/.venv/
 __pycache__/
