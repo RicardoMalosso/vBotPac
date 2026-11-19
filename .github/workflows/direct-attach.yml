@@ -20,12 +20,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -c "import sys;sys.path.insert(0,'external');from native import binaries;print(binaries())"
+      - id: native
+        run: |
+          python -c "import os,sys;sys.path.insert(0,'external');from native import binaries;c,d=binaries();open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8').write('controller='+str(c)+'\ndll='+str(d)+'\n')"
+      - name: Rebuild with previous DLL still mapped
+        run: python tests/verify_native_build_cache.py
       - uses: actions/upload-artifact@v4
         with:
           name: vbotpac-native-x64
           path: |
-            build-external/pinj.exe
-            build-external/pinj_bridge.dll
-            build-external/Release/pinj.exe
-            build-external/Release/pinj_bridge.dll
+            ${{ steps.native.outputs.controller }}
+            ${{ steps.native.outputs.dll }}

@@ -84,10 +84,13 @@ def main():
     parser.add_argument('--profile',type=Path,default=ROOT/'external/profiles/exoria74-gl.json')
     parser.add_argument('--controller',type=Path);parser.add_argument('--dll',type=Path)
     args=parser.parse_args()
-    selected=pick(find_clients(args.profile),args.pid)
-    controller,dll=binaries(args.controller,args.dll)
-    selected=select_client(find_clients(args.profile),selected['pid'],selected['target'])
-    session=ModuleSession(ControllerTransport(str(controller),selected['pid'],str(dll)))
+    try:
+        selected=pick(find_clients(args.profile),args.pid)
+        controller,dll=binaries(args.controller,args.dll)
+        selected=select_client(find_clients(args.profile),selected['pid'],selected['target'])
+        session=ModuleSession(ControllerTransport(str(controller),selected['pid'],str(dll)))
+    except (OSError,ValueError,TimeoutError) as error:
+        print(str(error),file=sys.stderr);return 1
     try:
         session.bind();print('PID',selected['pid'],session.load(selected));print('Bot log:',session.log);print('vBot is in the game client. Commands: status | pause | resume | unload')
         commands=queue.Queue()

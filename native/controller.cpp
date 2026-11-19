@@ -11,11 +11,12 @@
 #include "profile.hpp"
 struct Handle { HANDLE h; ~Handle(){if(h&&h!=INVALID_HANDLE_VALUE)CloseHandle(h);} };
 [[noreturn]] void fail(const char* msg){throw std::runtime_error(std::string(msg)+" (Windows error "+std::to_string(GetLastError())+")");}
-uintptr_t module(DWORD pid,const std::wstring& name) {
+uintptr_t module(DWORD pid,const std::wstring& name,bool required=true) {
     Handle snap{CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,pid)};
     MODULEENTRY32W e{};e.dwSize=sizeof(e);
     if(Module32FirstW(snap.h,&e))do{if(_wcsicmp(e.szModule,name.c_str())==0)return reinterpret_cast<uintptr_t>(e.modBaseAddr);}while(Module32NextW(snap.h,&e));
-    throw std::runtime_error("Required module not found in target");
+    if(required)throw std::runtime_error("Required module not found in target");
+    return 0;
 }
 void inject(DWORD pid,const std::wstring& dll) {
     Handle process{OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|PROCESS_CREATE_THREAD|PROCESS_VM_OPERATION|PROCESS_VM_WRITE|PROCESS_VM_READ,FALSE,pid)};
@@ -55,7 +56,15 @@ int wmain(int argc,wchar_t** argv) {
     auto dll=std::filesystem::absolute(argv[2]).wstring();
     if(!std::filesystem::is_regular_file(dll))throw std::runtime_error("DLL file does not exist");
     // Do not load a second copy when the bridge is already connected.
-    if(!WaitNamedPipeW(pipe_name(pid).c_str(),100))inject(pid,dll);
+    if(!WaitNamedPipeW(pipe_name(pid).c_str(),100)) {
+      const DWORD error=GetLastError();
+      if(error==ERROR_SEM_TIMEOUT||error==ERROR_PIPE_BUSY)
+        throw std::runtime_error("The client bridge is busy. Close the other launcher before attaching.");
+      if(error!=ERROR_FILE_NOT_FOUND&&error!=ERROR_PATH_NOT_FOUND)fail("Cannot inspect existing client bridge");
+      if(module(pid,std::filesystem::path(dll).filename().wstring(),false))
+        throw std::runtime_error("A bridge DLL is already loaded but not responding. Restart this client before attaching.");
+      inject(pid,dll);
+    }
     for(int i=0;i<50&&!WaitNamedPipeW(pipe_name(pid).c_str(),100);++i)Sleep(100);
     Handle pipe{CreateFileW(pipe_name(pid).c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,0,nullptr)};
     if(pipe.h==INVALID_HANDLE_VALUE)fail("Bridge unavailable (check debugger output for profile/hook errors)");

@@ -28,6 +28,8 @@ The earlier native `ui/basic.otui` decrypt crash occurred because plaintext reso
 
 ## Lifecycle and verification
 
+Native build outputs use unique directories under `build-external/versions/<source-key>/<attempt>/`. The key includes native sources/headers, CMake inputs, build-helper code, pinned CMake version and compiler path. Successful outputs are cached with SHA-256 checksums; Lua/UI changes reuse them. Failed or damaged outputs are rebuilt in another directory, without deleting/replacing mapped binaries. Configure/build output stays in that attempt's `build.log`; the launcher handles setup/build failures before attachment. The controller rejects busy or loaded-but-unavailable bridges instead of injecting a second version. CI holds a real DLL mapped while building another revision, then verifies that both the original file and its cache remain usable.
+
 Startup loads every helper/panel and the full original profile before enabling macro ticks. Errors and compiled-script names are recorded in the private startup trace. Pause/resume uses the original enable/refresh path. Closing the launcher unloads; a five-second lost-heartbeat watcher also unloads. DLL code stays pinned until the client exits.
 
 Package and lifecycle fixtures verify migration, saved config preservation, actual global lookup, private profile writes, unchanged client module registry, callback returns, pause/resume, rollback, private logger/settings/resource writes, style names, font fallback and child binding. Client file loaders, settings writers and logger methods are configured to fail if accidentally called in the isolation fixture.
