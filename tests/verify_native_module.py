@@ -2,6 +2,7 @@
 import ctypes
 from pathlib import Path
 import sys
+import tempfile
 import lupa.luajit20 as luajit
 
 
@@ -23,15 +24,25 @@ def verify(library,lua_library=None):
         assert native.module_test(ctypes.byref(api),ctypes.byref(stack),L,source.encode(),out,len(out))==0
         assert lua.lua_gettop(L)==top,'Native compiler changed the caller stack'
         return out.value.decode()
+    sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'inclient'))
+    from launch import literal
     try:
+        with tempfile.TemporaryDirectory(prefix='vbot-files-\u00e1 space-') as folder, tempfile.TemporaryDirectory(prefix='vbot-other-') as other:
+            prefix='local _,open=...;'
+            assert run(prefix+'files=assert(open('+literal(folder)+"));assert(files('mkdir','/storage'));assert(files('write','/storage/a',string.char(0,255)..'hello'));assert(files('read','/storage/a')==string.char(0,255)..'hello');assert(files('write','/storage/a','replaced'));assert(files('append','/storage/a','!'));assert(files('read','/storage/a')=='replaced!');return 'private binary IO'")=='OK\nprivate binary IO'
+            assert run(prefix+'otherFiles=assert(open('+literal(other)+"));assert(not otherFiles('exists','/storage/a'));assert(files('read','/storage/a')=='replaced!');assert(files('list','/storage')=='a'..string.char(0));return 'root closures isolated'")=='OK\nroot closures isolated'
+            assert run("assert(not files('write','/../escape','x'));assert(not files('read','C:/escape'));assert(not files('remove','/'));assert(not files('read','/missing'));return 'paths guarded'")=='OK\npaths guarded'
+            if sys.platform!='win32':
+                (Path(folder)/'outside').symlink_to(other,target_is_directory=True)
+                assert run("assert(not files('write','/outside/escape','x'));return 'symlink guarded'")=='OK\nsymlink guarded'
+            assert not (Path(other)/'escape').exists()
+            print('PASS private native file adapter: atomic replacement, binary/Unicode paths, root isolation, traversal and symlink guards')
         assert run("local native=...;load=function()error('wrapped load called')end;loadstring=load;local f=assert(native(\"return 'CaveBot native load'\",'@vBot/main.lua'));return f()")=='OK\nCaveBot native load'
         assert run("local native=...;g_game={walk=function(dir)steps=(steps or 0)+dir end};local env=setmetatable({},{__index=_G});local f=assert(native('g_game.walk(2);return _G.g_game==g_game','@module/action.lua'));setfenv(f,env);assert(f());return steps")=='OK\n2'
         assert run("local native=...;local f,e=native('return )','@bad.lua');assert(not f and type(e)=='string');return 'syntax failure preserved'")=='OK\nsyntax failure preserved'
         assert run("local native=...;local f,e=native(42);assert(not f and e:find('string'));return 'type guarded'")=='OK\ntype guarded'
         assert run("local native=...;local f,e=native(string.rep(' ',1048577));assert(not f and e:find('1 MiB'));return 'bounded'")=='OK\nbounded'
         assert run("return )").startswith('ERROR\n')
-        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'inclient'))
-        from launch import literal
         from package import files
         count=0
         for file,relative in files():

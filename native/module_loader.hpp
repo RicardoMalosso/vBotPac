@@ -1,6 +1,7 @@
 #pragma once
 #include "lua_executor.hpp"
 #include "atomic_lua.hpp"
+#include "module_files.hpp"
 #include <thread>
 
 namespace pinj {
@@ -34,8 +35,9 @@ inline std::string execute_module(const LuaApi& lua,const AtomicLuaApi& stack,lu
     const int top=lua.gettop(L);
     struct Restore { const LuaApi& a;lua_State* L;int top;~Restore(){a.settop(L,top);} } restore{lua,L,top};
     module_compiler={lua,&stack,L,std::this_thread::get_id()};
+    module_files_context={lua,&stack,L,std::this_thread::get_id()};
     int status=lua.load(L,source.data(),source.size(),"=vBotPac.bootstrap");
-    if(status==0){stack.pushcclosure(L,module_compile,0);status=lua.pcall(L,1,1,0);}
+    if(status==0){stack.pushcclosure(L,module_compile,0);stack.pushcclosure(L,module_open_files,0);status=lua.pcall(L,2,1,0);}
     std::size_t length=0;const char* value=lua.tolstring(L,-1,&length);
     if(length>1048570)return "ERROR\nModule result exceeds frame budget";
     return std::string(status?"ERROR\n":"OK\n")+(value?std::string(value,length):"<non-string Lua result>");

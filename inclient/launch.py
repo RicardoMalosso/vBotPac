@@ -46,7 +46,7 @@ class ModuleSession:
         return value[3:]
     def bind(self):
         capability=self.transport.request('module-capabilities')
-        if capability!='OK\nvBotPac module loader v1':
+        if capability!='OK\nvBotPac module loader v2; private-files':
             raise ValueError('The loaded DLL lacks the in-client module loader. Restart the game once after building this branch; no fallback was used.')
         result=json.loads(self.transport.request('atomic-bind '+self.token))
         if result.get('status')!='bound':raise ValueError('Cannot bind selected game Lua state: '+str(result))
@@ -54,10 +54,17 @@ class ModuleSession:
     def load(self,selected):
         write_dir=self.request("return assert(g_resources.getWriteDir(),'Client write directory unavailable')")
         character=self.request("local p=g_game.getLocalPlayer();assert(p and g_game.isOnline(),'Log into the selected character first');return p:getName()")
-        spec=stage(write_dir,selected,character);spec['token']=self.token
+        data_root=ROOT/'data/inclient'
+        spec=stage(data_root,selected,character,legacy_dir=write_dir);spec['token']=self.token
+        settings_file=data_root/spec['settings'].lstrip('/')
+        if not settings_file.exists():
+            settings=json.loads(self.request("return json.encode(g_settings.getNode('vbotpac_inclient') or {})"))
+            settings_file.parent.mkdir(parents=True,exist_ok=True)
+            settings_file.write_text(json.dumps({'bot':settings}),encoding='utf-8')
         source='local SPEC='+literal(spec)+'\n'+(ROOT/'inclient/bootstrap.lua').read_text(encoding='utf-8')
         if len(source.encode())+43>65541:raise ValueError('Bootstrap exceeds the controller frame limit')
-        self.trace=Path(write_dir)/spec['trace'].lstrip('/')
+        self.trace=data_root/spec['trace'].lstrip('/')
+        self.log=data_root/spec['log'].lstrip('/')
         result=self.request(source);self.loaded=True;return result
     def control(self,operation):return self.request('return assert(_G.__vbotpac_module,"Runtime ended").control('+literal(self.token)+','+literal(operation)+')')
     def close(self):
@@ -82,7 +89,7 @@ def main():
     selected=select_client(find_clients(args.profile),selected['pid'],selected['target'])
     session=ModuleSession(ControllerTransport(str(controller),selected['pid'],str(dll)))
     try:
-        session.bind();print('PID',selected['pid'],session.load(selected));print('vBot is in the game client. Commands: status | pause | resume | unload')
+        session.bind();print('PID',selected['pid'],session.load(selected));print('Bot log:',session.log);print('vBot is in the game client. Commands: status | pause | resume | unload')
         commands=queue.Queue()
         def read_input():
             try:
@@ -100,6 +107,7 @@ def main():
     except (OSError,ValueError,TimeoutError) as error:
         print(str(error),file=sys.stderr)
         if hasattr(session,'trace'):print('Startup trace:',session.trace,file=sys.stderr)
+        if hasattr(session,'log'):print('Bot log:',session.log,file=sys.stderr)
         return 1
     finally:session.close()
     return 0

@@ -12,6 +12,21 @@ from launch import ModuleSession
 
 
 class PackageTests(unittest.TestCase):
+    def test_old_profile_data_is_copied_without_writing_to_the_client(self):
+        with tempfile.TemporaryDirectory() as legacy, tempfile.TemporaryDirectory() as own:
+            old=stage(legacy,{'sha256':'a'*64},'Player')
+            saved=Path(legacy)/old['profile'].lstrip('/')/'vBotPac/storage/profile_0.json'
+            saved.parent.mkdir(exist_ok=True);saved.write_text('{"saved":true}')
+            spec=stage(own,{'sha256':'a'*64},'Player',legacy_dir=legacy)
+            migrated=Path(own)/spec['profile'].lstrip('/')/'vBotPac/storage/profile_0.json'
+            self.assertEqual(migrated.read_text(),saved.read_text())
+            migrated.write_text('{"saved":"new"}')
+            stage(own,{'sha256':'a'*64},'Player',legacy_dir=legacy)
+            self.assertEqual(migrated.read_text(),'{"saved":"new"}')
+            self.assertEqual(saved.read_text(),'{"saved":true}')
+            runtime=Path(own)/spec['runtime'].lstrip('/')
+            self.assertIn('image-source-base64:',(runtime/'edit.otui').read_text())
+            self.assertIn('&save: false',(runtime/'bot.otui').read_text())
     def test_native_ui_and_image_resources_use_the_plaintext_bot_tree(self):
         with tempfile.TemporaryDirectory() as folder:
             spec=stage(folder,{'sha256':'a'*64},'Player')
@@ -65,7 +80,7 @@ class PackageTests(unittest.TestCase):
             def __init__(self):self.calls=[]
             def request(self,command):
                 self.calls.append(command)
-                if command=='module-capabilities':return 'OK\nvBotPac module loader v1'
+                if command=='module-capabilities':return 'OK\nvBotPac module loader v2; private-files'
                 if command.startswith('atomic-bind '):return '{"status":"bound"}'
                 return 'OK\nvalue'
             def close(self):pass
@@ -144,16 +159,26 @@ g_game={isOnline=function()return true end,getLocalPlayer=function()return playe
 local module={getName=function()return 'game_interface' end}
 g_modules={getModules=function()return {module}end}
 existingBot={marker='existing'};modules={game_interface={},game_bot=existingBot}
-g_settings={getNode=function()return {}end,setNode=function()end}
-g_logger={info=function()end,warning=function()end}
+g_settings={getNode=function()return {}end,setNode=function()error('Client settings write')end,save=function()error('Client settings save')end}
+g_logger={info=function()error('Client logger used')end,warning=function()error('Client logger used')end,error=function()error('Client logger used')end}
 json={encode=function()return '{}' end}
 function connect(object,callbacks)lastCallbacks=callbacks end;function disconnect()end
 function scheduleEvent(fn,ms)nextId=nextId+1;queue[nextId]={fn=fn,ms=ms};return nextId end
 function removeEvent(id)queue[id]=nil end
 function runTimer(ms)for id,event in pairs(queue)do if event.ms==ms then queue[id]=nil;event.fn();return end end;error('Missing timer')end
 widget={destroy=function()destroyed=true end,open=function()end,raise=function()end,setOn=function()end}
-g_ui={loadUI=function()return widget end,importStyle=function()end}
-resources={};g_resources={fileExists=function(file)return resources[file]~=nil end,readFileContents=function(file)return assert(resources[file],file)end,writeFileContents=function()end}
+g_ui={loadUI=function()error('Client file UI used')end,importStyle=function()error('Client file style used')end,
+ loadUIFromString=function()return widget end,importStyleFromString=function()return true end}
+resources={};g_resources={readFileContents=function()error('Client resource reader used')end,writeFileContents=function()error('Client resource writer used')end}
+function nativeFiles(root)
+ return function(op,name,data)
+  if op=='exists' then return resources[name]~=nil end
+  if op=='read' then return assert(resources[name],name)end
+  if op=='write' then resources[name]=data;return true end
+  if op=='append' then resources[name]=(resources[name]or '')..data;return true end
+  error('Unexpected operation '..op)
+ end
+end
 ''')
         code='''
 local running=false
@@ -175,19 +200,20 @@ function vbpIsRunning()return running end
 function vbpSetEnabled(value)if value then refresh()else clear()end end
 '''
         if fail:code+='\nfunction init()botWindow=g_ui.loadUI("fixture");error("fixture failure")end\n'
-        lua.globals().resources['/fixture/bot/runtime/bot.lua']=code
-        spec={'token':'t','runtime':'/fixture/bot/runtime','profile':'/private/bot','trace':'/trace.json','helpers':{}}
+        lua.globals().resources['/vbotpac_inclient/bot/runtime/fixture/bot.lua']=code
+        lua.globals().resources['/vbotpac_inclient/bot/runtime/fixture/fixture.otui']='UIWidget'
+        spec={'token':'t','runtime':'/vbotpac_inclient/bot/runtime/fixture','profile':'/vbotpac_inclient/profiles/fixture/bot','trace':'/trace.json','settings':'/settings.json','log':'/inclient.log','dataRoot':'/private/project','styles':{},'helpers':{}}
         source='local SPEC='+literal(spec)+'\n'+(ROOT/'inclient/bootstrap.lua').read_text()
         return lua,source
     def test_legacy_encrypted_resource_layout_is_rejected_before_ui_creation(self):
         lua,source=self.fixture()
-        source=source.replace('"/fixture/bot/runtime"','"/vbotpac_inclient/runtime/legacy"')
+        source=source.replace('"/vbotpac_inclient/bot/runtime/fixture"','"/vbotpac_inclient/runtime/legacy"')
         with self.assertRaisesRegex(Exception,'Unsafe native resource layout'):
-            lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler)
+            lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler,lua.globals().nativeFiles)
         self.assertIsNone(lua.globals().__vbotpac_module)
         self.assertIsNone(lua.globals().destroyed)
     def test_private_namespace_uses_real_globals_and_keeps_registry_unchanged(self):
-        lua,source=self.fixture();result=lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler)
+        lua,source=self.fixture();result=lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler,lua.globals().nativeFiles)
         self.assertTrue(result.startswith('loaded'))
         self.assertTrue(lua.eval('modules.game_bot==existingBot'))
         self.assertIsNone(lua.eval('_G.privateGlobal'))
@@ -200,12 +226,42 @@ function vbpSetEnabled(value)if value then refresh()else clear()end end
         self.assertIsNone(lua.globals().__vbotpac_module)
         self.assertTrue(lua.globals().destroyed)
     def test_signal_callbacks_preserve_return_values(self):
-        lua,source=self.fixture();lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler)
+        lua,source=self.fixture();lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler,lua.globals().nativeFiles)
         lua.execute('__vbotpac_module.scope.connect(g_game,{onTest=function()return true,42 end})')
         self.assertEqual(lua.eval('lastCallbacks.onTest()'),(True,42))
+    def test_logs_settings_and_resources_do_not_use_client_writers_or_logger(self):
+        lua,source=self.fixture();lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler,lua.globals().nativeFiles)
+        lua.execute('''
+local scope=__vbotpac_module.scope
+scope.print('private diagnostic');scope.g_logger.error('private error')
+scope.g_settings.setNode('bot',{saved=true});scope.g_settings.save()
+scope.g_resources.writeFileContents('/bot/fixture.cfg','private file')
+''')
+        self.assertIn('private diagnostic',lua.globals().resources['/inclient.log'])
+        self.assertIn('private error',lua.globals().resources['/inclient.log'])
+        self.assertEqual(lua.globals().resources['/settings.json'],'{}')
+        self.assertEqual(lua.globals().resources['/vbotpac_inclient/profiles/fixture/bot/fixture.cfg'],'private file')
+    def test_private_window_styles_fonts_and_child_binding(self):
+        lua,source=self.fixture();lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler,lua.globals().nativeFiles)
+        lua.execute('''
+g_fonts={fontExists=function(name)return name~='cipsoftFont'end}
+g_ui.importStyleFromString=function(text)importedStyle=text;return true end
+g_ui.createWidget=function(name)
+ assert(name=='VBPM_ExtrasWindow')
+ return {getChildren=function()return {{getId=function()return 'closeButton'end,getChildren=function()return {}end}}end}
+end
+__vbotpac_module.scope.g_ui.importStyleFromString([[ExtrasWindow < UIWidget
+  Button
+    id: closeButton
+    font: cipsoftFont]])
+createdWindow=__vbotpac_module.scope.g_ui.createWidget('ExtrasWindow')
+''')
+        self.assertIn('#VBPM_ExtrasWindow < UIWidget',lua.globals().importedStyle)
+        self.assertNotIn('cipsoftFont',lua.globals().importedStyle)
+        self.assertTrue(lua.eval('createdWindow.closeButton~=nil'))
     def test_startup_failure_rolls_back_only_its_namespace_and_widgets(self):
         lua,source=self.fixture(True)
-        with self.assertRaisesRegex(Exception,'fixture failure'):lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler)
+        with self.assertRaisesRegex(Exception,'fixture failure'):lua.eval('function(...) '+source+' end')(lua.globals().nativeCompiler,lua.globals().nativeFiles)
         self.assertIsNone(lua.globals().__vbotpac_module)
         self.assertTrue(lua.eval('modules.game_bot==existingBot'))
         self.assertTrue(lua.globals().destroyed)

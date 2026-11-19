@@ -188,7 +188,7 @@ DWORD WINAPI worker(void*) {
         std::string command(length,'\0');if(!pinj::pipe_transfer(pipe,command.data(),length,false))break;
         std::string response;
         if(command=="status")response="vBotPac in-client bridge v0.9; profile="+std::string(fingerprint)+"; lua_pcall observations="+std::to_string(calls.load());
-        else if(command=="module-capabilities")response=atomic_api.pushcclosure&&atomic_api.pushlstring?"OK\nvBotPac module loader v1":"ERROR\nModule compiler unavailable";
+        else if(command=="module-capabilities")response=atomic_api.pushcclosure&&atomic_api.pushlstring?"OK\nvBotPac module loader v2; private-files":"ERROR\nModule compiler unavailable";
         else if(command.rfind("module-v1 ",0)==0) {
             if(command.size()<=43||command[42]!=' '||command.substr(10,32)!=connection_owner)response="ERROR\nBind this connection before loading a module";
             else response=execute(command.substr(43),connection_owner,false,{},true);
